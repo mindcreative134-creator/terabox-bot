@@ -80,3 +80,21 @@ Waiting for incoming messages on Telegram...
 3. Koi bhi TeraBox link paste karein, jaise:
    `https://terasharelink.com/s/1vPhwgMunzrSkOExL3AG8dA`
 4. Bot 2-3 seconds me movie poster, 2h 06m ka full duration, **Watch Online** aur **Fast Download** buttons ke sath reply kar dega!
+
+---
+
+## ☁️ Koyeb Par Free 24/7 Deploy Kaise Karein (Step-by-Step)
+
+Koyeb par aap is bot ko **Free 24/7 Cloud** par host kar sakte hain:
+
+1. [Koyeb.com](https://www.koyeb.com/) par login karein (GitHub se Sign In karein).
+2. **Create Service** par click karein aur **GitHub** select karein.
+3. Apna repository select karein: `mindcreative134-creator/terabox-bot`.
+4. **Builder:** `Dockerfile` select karein (Repository me Dockerfile already provided hai).
+5. **Environment Variables:**
+   * Key: `BOT_TOKEN`
+   * Value: `7876010393:AAG9n6VlIGjTrDlAkxXnlxvOyGxe34BzS5M`
+6. **Port:** `8000` (Health check ke liye).
+7. **Deploy** par click karein!
+8. 2 minute me aapka bot Koyeb Cloud par 24/7 bina computer on rakhe live ho jayega!
+

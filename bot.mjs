@@ -1,9 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Koyeb / Render / Cloud Health Check Server
+const CLOUD_PORT = process.env.PORT || 8000;
+try {
+  http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, status: 'online', bot: 'TeraBox Telegram Bot' }));
+  }).listen(CLOUD_PORT, () => {
+    console.log(`[HTTP] Cloud Health check server active on port ${CLOUD_PORT}`);
+  });
+} catch (e) {
+  console.log(`[HTTP] Health server note: ${e.message}`);
+}
 
 // 1. Load Configuration
 let config = {
