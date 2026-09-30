@@ -796,6 +796,9 @@ async function captureTeraboxOnce(sourceUrl, requestedAction) {
   const chrome = spawn(
     chromePath,
     [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
       '--headless=new',
       '--disable-gpu',
       '--mute-audio',

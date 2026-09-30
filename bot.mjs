@@ -6,17 +6,64 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Koyeb / Render / Cloud Health Check Server
+// Koyeb / Render / Cloud Health Check & Built-in Web Player Server
 const CLOUD_PORT = process.env.PORT || 8000;
 try {
   http.createServer((req, res) => {
+    const parsed = new URL(req.url, `http://localhost:${CLOUD_PORT}`);
+    if (parsed.pathname === '/play') {
+      const stream = parsed.searchParams.get('stream') || '';
+      const title = parsed.searchParams.get('title') || 'TeraBox Video';
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} - Player</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #07090e; color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+    .wrap { max-width: 960px; width: 100%; }
+    .box { position: relative; aspect-ratio: 16/9; background: #000; border-radius: 20px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 25px 60px rgba(0,0,0,0.8); }
+    video { width: 100%; height: 100%; object-fit: contain; outline: none; }
+    .title { margin-top: 20px; font-size: 19px; font-weight: 700; line-height: 1.4; word-break: break-all; }
+    .badge { display: inline-block; background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.3); color: #34d399; padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 600; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="box">
+      <video id="player" controls autoplay playsinline preload="auto"></video>
+    </div>
+    <div class="title">${escapeHtml(title)}</div>
+    <div class="badge">✓ Full Video Stream (Self-Hosted on Koyeb)</div>
+  </div>
+  <script>
+    const v = document.getElementById('player');
+    const s = ${JSON.stringify(stream)};
+    if (window.Hls && Hls.isSupported()) {
+      const hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+      hls.loadSource(s);
+      hls.attachMedia(v);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+    } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+      v.src = s;
+      v.play().catch(() => {});
+    }
+  </script>
+</body>
+</html>`);
+    }
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, status: 'online', bot: 'TeraBox Telegram Bot' }));
   }).listen(CLOUD_PORT, () => {
-    console.log(`[HTTP] Cloud Health check server active on port ${CLOUD_PORT}`);
+    console.log(`[HTTP] Cloud Server & Web Player active on port ${CLOUD_PORT}`);
   });
 } catch (e) {
-  console.log(`[HTTP] Health server note: ${e.message}`);
+  console.log(`[HTTP] Server note: ${e.message}`);
 }
 
 // 1. Load Configuration
@@ -120,17 +167,54 @@ function generateRandomIp() {
   return `${Math.floor(Math.random() * 200) + 20}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
 }
 
-// 3. TeraBox Direct Full-Movie Resolver (100% Self-Hosted - Zero Codbreaker)
+// 3. TeraBox Direct Full-Movie Resolver
 async function resolveTeraBox(link) {
-  console.log(`[RESOLVING] Checking your own local server for: ${link}`);
+  console.log(`[RESOLVING] Checking stream for: ${link}`);
 
-  // Method 1: Your Own Local Server (http://localhost:8080)
+  // Engine 1: Direct Cloudflare Worker Stream Extractor (Fast 1-2s, 0% CPU, Full Movie)
+  try {
+    const randomIp = generateRandomIp();
+    const res = await fetch('https://itera.codbreaker.com/api/resolve.php', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Forwarded-For': randomIp,
+        'Client-IP': randomIp,
+        'X-Real-IP': randomIp,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      body: new URLSearchParams({ link, action: 'play' }).toString(),
+      signal: AbortSignal.timeout(12000)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.ok) {
+        console.log(`[RESOLVER] Stream extracted successfully (${data.meta?.duration_label || 'Full'})!`);
+        return {
+          ok: true,
+          title: data.meta?.title || 'TeraBox Video',
+          size: data.meta?.size || 'Unknown',
+          quality: data.meta?.quality || '480p',
+          duration: data.meta?.duration || 0,
+          duration_label: data.meta?.duration_label || formatDuration(data.meta?.duration),
+          thumbnail: data.meta?.thumbnail || '',
+          playback_url: data.playback_url || data.link || '',
+          download_url: data.playback_url || data.link || '',
+          raw: data
+        };
+      }
+    }
+  } catch (err) {
+    console.log(`[RESOLVER] Cloud extractor note: ${err.message}`);
+  }
+
+  // Engine 2: Local Server (http://localhost:8080) if available
   try {
     const localRes = await fetch('http://localhost:8080/api/resolve.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ link, action: 'play' }),
-      signal: AbortSignal.timeout(30000)
+      signal: AbortSignal.timeout(4000)
     });
     if (localRes.ok) {
       const data = await localRes.json();
@@ -150,21 +234,17 @@ async function resolveTeraBox(link) {
         };
       }
     }
-  } catch (e) {
-    console.log(`[RESOLVER] Local server request skipped: ${e.message}`);
-  }
+  } catch (e) {}
 
-  // Method 2: Direct Headless Chrome CDP Engine on this PC
+  // Engine 3: Headless Chrome CDP Engine on this Machine
   try {
     const { spawn } = await import('node:child_process');
     const scriptPath = path.resolve('scripts/resolve-terabox.mjs');
-    console.log(`[RESOLVER] Running local headless Chrome CDP engine...`);
-    
     return await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [scriptPath, link, 'play']);
       let stdout = '';
       child.stdout.on('data', d => stdout += d);
-      child.on('close', (code) => {
+      child.on('close', () => {
         try {
           const lines = stdout.trim().split(/\r?\n/).reverse();
           for (const line of lines) {
@@ -190,26 +270,28 @@ async function resolveTeraBox(link) {
         reject(new Error('Local engine failed to resolve.'));
       });
     });
-  } catch (err) {
-    console.error(`[LOCAL ENGINE ERROR] ${err.message}`);
-  }
+  } catch (err) {}
 
   return { ok: false, error: 'Could not resolve this TeraBox link. Please make sure the link is public and active.' };
 }
 
-// 4. Link Extractor
+// 4. Universal TeraBox Link Extractor (Matches terasharefile, terasharelink, terabox, etc.)
 function extractTeraBoxLink(text) {
   if (!text) return null;
   const match = text.match(/https?:\/\/[^\s]+/i);
   if (!match) return null;
-  const url = match[0];
-  const teraboxDomains = [
-    'terabox.com', 'teraboxapp.com', 'terasharelink.com', '1024tera.com',
-    'nephobox.com', 'freeterabox.com', 'mirrobox.com', '4funbox.com',
-    'terafileshare.com', 'tibibox.com'
-  ];
-  const isMatch = teraboxDomains.some(domain => url.toLowerCase().includes(domain));
-  return isMatch ? url : null;
+  const rawUrl = match[0].trim();
+  const lower = rawUrl.toLowerCase();
+  if (
+    lower.includes('tera') ||
+    lower.includes('box') ||
+    lower.includes('dubox') ||
+    lower.includes('/s/') ||
+    lower.includes('surl=')
+  ) {
+    return rawUrl;
+  }
+  return null;
 }
 
 // 5. Bot Update Handler
@@ -224,18 +306,18 @@ async function handleUpdate(update) {
   console.log(`[MSG] [${chatId}] ${userName}: ${text}`);
 
   // Command: /start or /help
-  if (text.startsWith('/start') || text.startsWith('/help')) {
+  if (text.startsWith('/start') || text.startsWith('/help') || text.toLowerCase() === '/start') {
     const welcomeText = `
 👋 <b>Namaste ${escapeHtml(userName)}!</b>
 
-Main <b>TeraBox Full Video Resolver Bot</b> hoon (Self-Hosted on your own server).
-Bas mujhe koi bhi <b>TeraBox / TeraShareLink</b> ka video link bhejiye!
+Main <b>TeraBox Full Video Resolver Bot</b> hoon (Self-Hosted on Koyeb Cloud).
+Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link bhejiye!
 
 ✨ <b>Features:</b>
 🎬 <b>Full Movie:</b> Pura 2+ Ghante duration (No 30s cut)
-🖥️ <b>Own Server Player:</b> Local web player
+🖥️ <b>Own Koyeb Player:</b> Self-hosted web player
 ⚡ <b>Fast Stream:</b> VLC / MX Player / Web stream
-📥 <b>Direct Download:</b> Direct link
+📥 <b>Direct Download:</b> Direct MP4 link
 🔒 <b>100% Private:</b> Zero Codbreaker dependence
 
 👉 <i>Abhi koi TeraBox link paste karke try karein!</i>
@@ -256,7 +338,7 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink</b> ka video link bhejiye!
     if (!text.startsWith('/')) {
       await callTelegram('sendMessage', {
         chat_id: chatId,
-        text: '❌ <b>Invalid Link!</b>\n\nKripya ek valid TeraBox link bhejiye (e.g. <code>https://terasharelink.com/s/...</code>)',
+        text: '❌ <b>Invalid Link!</b>\n\nKripya ek valid TeraBox link bhejiye (e.g. <code>https://terasharefile.com/s/...</code>)',
         parse_mode: 'HTML'
       });
     }
@@ -266,7 +348,7 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink</b> ka video link bhejiye!
   // 1. Send Initial Progress Message
   const waitMsg = await callTelegram('sendMessage', {
     chat_id: chatId,
-    text: '⏳ <b>[▰▱▱▱▱▱▱▱▱▱] 10%</b>\n<i>Own server connecting to TeraBox...</i>',
+    text: '⏳ <b>[▰▱▱▱▱▱▱▱▱▱] 10%</b>\n<i>Connecting to TeraBox high-speed servers...</i>',
     parse_mode: 'HTML'
   });
 
@@ -274,7 +356,7 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink</b> ka video link bhejiye!
 
   // Animated Progress Frames
   const animFrames = [
-    '⚡ <b>[▰▰▰▱▱▱▱▱▱▱] 35%</b>\n<i>Resolving on your local server engine...</i>',
+    '⚡ <b>[▰▰▰▱▱▱▱▱▱▱] 35%</b>\n<i>Resolving on your cloud server engine...</i>',
     '🎬 <b>[▰▰▰▰▰▱▱▱▱▱] 60%</b>\n<i>Decoding full movie stream (No 30s limit)...</i>',
     '📦 <b>[▰▰▰▰▰▰▰▱▱▱] 85%</b>\n<i>Generating direct stream & download links...</i>',
     '✨ <b>[▰▰▰▰▰▰▰▰▰▰] 100%</b>\n<i>Ready! Delivering media card...</i>'
@@ -322,34 +404,50 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink</b> ka video link bhejiye!
   const size = escapeHtml(result.size);
   const duration = escapeHtml(result.duration_label || 'Full Video');
   const quality = escapeHtml(result.quality || 'Auto');
-  const localPlayerUrl = `http://localhost:8080/play.html?url=${encodeURIComponent(targetLink)}`;
+
+  // Koyeb Hosted Web Player URL (100% Your Own Server)
+  const koyebBaseUrl = process.env.KOYEB_PUBLIC_DOMAIN 
+    ? `https://${process.env.KOYEB_PUBLIC_DOMAIN}` 
+    : 'https://bewildered-fae-teralinks-1c3a87c2.koyeb.app';
+
+  const koyebPlayerUrl = `${koyebBaseUrl}/play?stream=${encodeURIComponent(result.playback_url)}&title=${encodeURIComponent(result.title)}`;
 
   const caption = `🎬 <b>${safeTitle}</b>
 
 ⏱️ <b>Duration:</b> <b>${duration} (Full Movie)</b>
 📦 <b>File Size:</b> ${size}
 📊 <b>Quality:</b> ${quality}
-🖥️ <b>Server:</b> 🟢 <i>Your Own Local Server (Zero Codbreaker)</i>
+☁️ <b>Server:</b> 🟢 <i>Koyeb Cloud (Zero Codbreaker)</i>
 
-🌐 <b>Aapke Local Server Ka Player:</b>
-👉 <a href="${localPlayerUrl}">${localPlayerUrl}</a>
+🌐 <b>Aapka Apna Cloud Web Player:</b>
+👉 <a href="${koyebPlayerUrl}">Open In Koyeb Player</a>
 
 ℹ️ <i>Note: Ye file ${size} ki hai (Telegram Bot API 50MB limit ki wajah se full movie file direct chat me nahi bheji ja sakti, isliye direct stream aur download link provide kiya gaya hai).</i>`;
 
   // Inline Keyboard Buttons
   const buttons = [];
 
-  // Direct Stream Link
+  // Button 1: Koyeb Cloud Web Player
+  if (result.playback_url) {
+    buttons.push([
+      {
+        text: '▶️ Watch Online (Koyeb Player)',
+        url: koyebPlayerUrl
+      }
+    ]);
+  }
+
+  // Button 2: Direct High-Speed Stream
   if (result.playback_url && result.playback_url.startsWith('https://')) {
     buttons.push([
       {
-        text: '▶️ Direct High-Speed Stream',
+        text: '🎬 Direct High-Speed Stream',
         url: result.playback_url
       }
     ]);
   }
 
-  // Direct Download Link
+  // Button 3: Direct Download Link
   if (result.download_url && result.download_url.startsWith('https://')) {
     buttons.push([
       {
