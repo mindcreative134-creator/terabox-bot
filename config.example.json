@@ -1,0 +1,5 @@
+{
+  "BOT_TOKEN": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+  "WEB_PLAYER_BASE_URL": "http://localhost:8080",
+  "ADMIN_ID": ""
+}

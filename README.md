@@ -1,1 +1,82 @@
-# terabox-bot
+# 🤖 TeraBox Full-Movie Telegram Bot (Zero-Database Edition)
+
+Yeh ek standalone, zero-dependency Telegram Bot hai jo kisi bhi TeraBox / TeraShareLink ko resolve karke:
+- 🎬 **Full Movie Details** (Title, File Size, Quality)
+- ⏱️ **Full Duration** (Pura 2+ Hours, bina 30-sec limit ke)
+- ▶️ **Watch Online Button** (In-Browser Video Player)
+- 📥 **Fast Download Button** (1-Click Direct MP4 Download)
+- ⚡ **VLC / MX Player Link** (Direct M3U8 Stream)
+provide karta hai.
+
+---
+
+## 📋 Required Variables (Kya-Kya Dena Hoga)
+
+Bot ko run karne ke liye sirf **1 cheez** zaroori hai:
+
+| Variable | Description | Kahan Milega |
+| :--- | :--- | :--- |
+| **`BOT_TOKEN`** | Telegram Bot API Token | Telegram par `@BotFather` se free me 1 minute me |
+| **`WEB_PLAYER_BASE_URL`** | *(Optional)* Web Player URL | Default `http://localhost:8080` (Aapka local server ya domain) |
+
+---
+
+## 🚀 Setup & Run Kaise Karein (Step-by-Step)
+
+### Step 1: Telegram Bot Token Lelein
+1. Telegram open karein aur search karein: **`@BotFather`**
+2. Message bhejein: `/newbot`
+3. Bot ka ek display name likhein (e.g. `My TeraBox Bot`)
+4. Ek unique username likhein jo `bot` par khatam ho (e.g. `my_terabox_play_bot`)
+5. BotFather aapko ek **HTTP API Token** dega, jo is tarah dikhta hai:
+   `7182938472:AAFlw93kd8s9-Kdjs83...`
+
+---
+
+### Step 2: Token Ko Configuration Me Daalein
+File open karein:
+👉 [`telegram_bot/config.json`](file:///c:/Users/keshav/Downloads/antygravity/antygravity/iteraplay2.0/iteraplay/telegram_bot/config.json)
+
+Aur apna token wahan paste karein:
+```json
+{
+  "BOT_TOKEN": "7182938472:AAFlw93kd8s9-Kdjs83...",
+  "WEB_PLAYER_BASE_URL": "http://localhost:8080",
+  "ADMIN_ID": ""
+}
+```
+
+---
+
+### Step 3: Bot Ko Start Karein
+
+Aap do tarike se start kar sakte hain:
+
+* **Tarika 1 (Double Click):**
+  Folder me maujood [`start_bot.bat`](file:///c:/Users/keshav/Downloads/antygravity/antygravity/iteraplay2.0/iteraplay/telegram_bot/start_bot.bat) file par double click karein!
+
+* **Tarika 2 (Terminal Command):**
+  Terminal me run karein:
+  ```bash
+  node telegram_bot/bot.mjs
+  ```
+
+Jab bot start ho jayega, screen par aayega:
+```
+=======================================================
+🤖 TeraBox Telegram Bot is LIVE & READY!
+👉 Bot Username: @your_bot_name
+👉 Web Player URL: http://localhost:8080
+👉 Database Mode: ZERO DB (Fast Stateless Testing)
+=======================================================
+Waiting for incoming messages on Telegram...
+```
+
+---
+
+### Step 4: Test Kaise Karein
+1. Telegram par apne banaye huye bot ko open karein.
+2. `/start` click karein.
+3. Koi bhi TeraBox link paste karein, jaise:
+   `https://terasharelink.com/s/1vPhwgMunzrSkOExL3AG8dA`
+4. Bot 2-3 seconds me movie poster, 2h 06m ka full duration, **Watch Online** aur **Fast Download** buttons ke sath reply kar dega!

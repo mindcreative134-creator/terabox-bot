@@ -1,0 +1,10 @@
+# Secrets & Config
+.env
+config.json
+terabox_cookie.txt
+
+# Dependencies & Logs
+node_modules/
+npm-debug.log*
+.DS_Store
+*.log

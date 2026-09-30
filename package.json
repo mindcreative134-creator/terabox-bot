@@ -1,0 +1,22 @@
+{
+  "name": "terabox-telegram-bot",
+  "version": "1.0.0",
+  "description": "High-Speed Full-Movie TeraBox Link Resolver Telegram Bot (Zero Paid API)",
+  "main": "bot.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node bot.mjs"
+  },
+  "keywords": [
+    "terabox",
+    "telegram-bot",
+    "resolver",
+    "video-stream",
+    "download"
+  ],
+  "author": "mindcreative134-creator",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
