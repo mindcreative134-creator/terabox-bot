@@ -60,22 +60,18 @@ if (fs.existsSync(ENV_PATH)) {
 if (process.env.BOT_TOKEN) config.BOT_TOKEN = process.env.BOT_TOKEN;
 if (process.env.WEB_PLAYER_BASE_URL) config.WEB_PLAYER_BASE_URL = process.env.WEB_PLAYER_BASE_URL;
 
-const TOKEN = config.BOT_TOKEN?.trim();
+// Fallback Token for instant Cloud & Koyeb execution
+const FALLBACK_TOKEN = '7876010393:AAG9n6VlIGjTrDlAkxXnlxvOyGxe34BzS5M';
+const TOKEN = (config.BOT_TOKEN && config.BOT_TOKEN !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') 
+  ? config.BOT_TOKEN.trim() 
+  : FALLBACK_TOKEN;
 
-if (!TOKEN || TOKEN === 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
+if (!TOKEN) {
   console.log(`
 ======================================================================
 ❌ [ERROR] Telegram Bot Token is MISSING!
 ======================================================================
 👉 Telegram Bot chalane ke liye BOT_TOKEN zaroori hai.
-
-Kaise set karein:
-1. Telegram par @BotFather ke paas jayein.
-2. /newbot command dekar apna naya Bot banayein.
-3. BotFather aapko ek Token dega (e.g. 123456789:ABCdef...).
-4. Us token ko 'telegram_bot/config.json' file me daalein:
-   "BOT_TOKEN": "123456789:ABCdef..."
-5. Phir wapas run karein: node telegram_bot/bot.mjs
 ======================================================================
 `);
   process.exit(1);
