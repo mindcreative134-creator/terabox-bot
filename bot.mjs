@@ -70,6 +70,9 @@ try {
 let config = {
   BOT_TOKEN: '',
   WEB_PLAYER_BASE_URL: 'http://localhost:8080',
+  API_ID: '',
+  API_HASH: '',
+  SESSION_STRING: '',
   ADMIN_ID: ''
 };
 
@@ -106,12 +109,57 @@ if (fs.existsSync(ENV_PATH)) {
 // Environment variables take highest priority
 if (process.env.BOT_TOKEN) config.BOT_TOKEN = process.env.BOT_TOKEN;
 if (process.env.WEB_PLAYER_BASE_URL) config.WEB_PLAYER_BASE_URL = process.env.WEB_PLAYER_BASE_URL;
+if (process.env.API_ID) config.API_ID = process.env.API_ID;
+if (process.env.API_HASH) config.API_HASH = process.env.API_HASH;
+if (process.env.SESSION_STRING) config.SESSION_STRING = process.env.SESSION_STRING;
 
 // Fallback Token for instant Cloud & Koyeb execution
 const FALLBACK_TOKEN = '7876010393:AAG9n6VlIGjTrDlAkxXnlxvOyGxe34BzS5M';
 const TOKEN = (config.BOT_TOKEN && config.BOT_TOKEN !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') 
   ? config.BOT_TOKEN.trim() 
   : FALLBACK_TOKEN;
+
+// 2. MTProto 2 GB Upload Engine
+let mtprotoClient = null;
+
+async function initMTProto() {
+  const rawId = process.env.API_ID || config.API_ID || '';
+  const apiId = parseInt(String(rawId).trim(), 10);
+  const apiHash = String(process.env.API_HASH || config.API_HASH || '').trim();
+  const sessionString = String(process.env.SESSION_STRING || config.SESSION_STRING || '').trim();
+
+  if (!apiId || !apiHash) {
+    console.log('[MTPROTO] API_ID & API_HASH are not set in environment. Running in standard Bot API mode.');
+    return null;
+  }
+
+  try {
+    console.log(`[MTPROTO] Initializing 2 GB MTProto Client (API_ID: ${apiId})...`);
+    const { TelegramClient } = await import('telegram');
+    const { StringSession } = await import('telegram/sessions/index.js');
+
+    const session = new StringSession(sessionString);
+    const client = new TelegramClient(session, apiId, apiHash, {
+      connectionRetries: 5,
+    });
+
+    if (sessionString) {
+      await client.start();
+      console.log('[MTPROTO] Connected with User Session! (Uploads up to 2GB - 4GB Active)');
+    } else {
+      await client.start({
+        botAuthToken: TOKEN,
+      });
+      console.log('[MTPROTO] Connected with Bot Token via MTProto! (Uploads up to 2GB Active)');
+    }
+
+    mtprotoClient = client;
+    return client;
+  } catch (err) {
+    console.error('[MTPROTO INIT ERROR]', err.message);
+    return null;
+  }
+}
 
 if (!TOKEN) {
   console.log(`
@@ -467,33 +515,65 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
 
   const replyMarkup = { inline_keyboard: buttons };
 
-  // 5. ATTEMPT DIRECT VIDEO UPLOAD (sendVideo)
-  // If download_url or playback_url is a direct video stream, Telegram will attempt to deliver as native video
+  // 5. ATTEMPT DIRECT VIDEO UPLOAD (MTProto 2GB Engine or Bot API 50MB)
   const videoCandidates = [result.download_url, result.playback_url].filter(u => u && u.startsWith('https://'));
   let videoDelivered = false;
 
-  for (const videoUrl of videoCandidates) {
+  // 5A. Try 2 GB MTProto Client (if API_ID & API_HASH are configured in environment)
+  if (mtprotoClient && videoCandidates.length > 0) {
     try {
-      console.log(`[BOT] Attempting direct sendVideo to chat ${chatId}...`);
-      const videoRes = await callTelegram('sendVideo', {
-        chat_id: chatId,
-        video: videoUrl,
+      console.log(`[MTPROTO] Uploading video to chat ${chatId} via 2GB MTProto Engine...`);
+      if (waitMsgId) {
+        await callTelegram('editMessageText', {
+          chat_id: chatId,
+          message_id: waitMsgId,
+          text: '📤 <b>[▰▰▰▰▰▰▰▰▰▱] 95%</b>\n<i>Uploading full video file via 2GB MTProto Engine...</i>',
+          parse_mode: 'HTML'
+        }).catch(() => {});
+      }
+
+      await mtprotoClient.sendFile(chatId, {
+        file: videoCandidates[0],
         caption: caption,
-        parse_mode: 'HTML',
-        supports_streaming: true,
-        duration: Number(result.duration) || undefined,
-        reply_markup: buttons.length > 0 ? replyMarkup : undefined
+        parseMode: 'html',
+        supportsStreaming: true,
+        progressCallback: (progress) => {
+          console.log(`[MTPROTO PROGRESS] ${Math.round(progress * 100)}%`);
+        }
       });
 
-      if (videoRes && videoRes.ok) {
-        console.log(`[BOT] Direct video delivered successfully!`);
-        videoDelivered = true;
-        break;
-      } else {
-        console.log(`[BOT] sendVideo notice: ${videoRes?.description || videoRes?.error}`);
-      }
+      console.log(`[MTPROTO] Video delivered successfully via MTProto!`);
+      videoDelivered = true;
     } catch (e) {
-      console.log(`[BOT] sendVideo attempt error: ${e.message}`);
+      console.log(`[MTPROTO] Upload notice: ${e.message}`);
+    }
+  }
+
+  // 5B. Standard Bot API sendVideo
+  if (!videoDelivered) {
+    for (const videoUrl of videoCandidates) {
+      try {
+        console.log(`[BOT] Attempting direct sendVideo to chat ${chatId}...`);
+        const videoRes = await callTelegram('sendVideo', {
+          chat_id: chatId,
+          video: videoUrl,
+          caption: caption,
+          parse_mode: 'HTML',
+          supports_streaming: true,
+          duration: Number(result.duration) || undefined,
+          reply_markup: buttons.length > 0 ? replyMarkup : undefined
+        });
+
+        if (videoRes && videoRes.ok) {
+          console.log(`[BOT] Direct video delivered successfully!`);
+          videoDelivered = true;
+          break;
+        } else {
+          console.log(`[BOT] sendVideo notice: ${videoRes?.description || videoRes?.error}`);
+        }
+      } catch (e) {
+        console.log(`[BOT] sendVideo attempt error: ${e.message}`);
+      }
     }
   }
 
@@ -560,6 +640,9 @@ async function startPolling() {
 =======================================================
 Waiting for incoming messages on Telegram...
 `);
+
+  // Initialize 2 GB MTProto Client if API_ID & API_HASH are set in environment
+  await initMTProto();
 
   let offset = 0;
   while (true) {

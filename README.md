@@ -98,3 +98,17 @@ Koyeb par aap is bot ko **Free 24/7 Cloud** par host kar sakte hain:
 7. **Deploy** par click karein!
 8. 2 minute me aapka bot Koyeb Cloud par 24/7 bina computer on rakhe live ho jayega!
 
+---
+
+## ⚡ 2 GB Direct Video Upload Kaise Activate Karein (MTProto Engine)
+
+Agar aap chahte hain ki bot 500 MB se lekar **2 GB** tak ki poori movie file direct Telegram chat ke andar send kare:
+
+1. [my.telegram.org](https://my.telegram.org) par jayein aur apna Telegram number login karein.
+2. **API development tools** par click karke ek app banayein.
+3. Wahan se aapko **`api_id`** aur **`api_hash`** mil jayega.
+4. Apne Koyeb Dashboard ya `.env` me yeh variables add karein:
+   - `API_ID`: `Aapka_api_id`
+   - `API_HASH`: `Aapka_api_hash`
+5. Bot restart hote hi automatic **2 GB MTProto Uploader** active ho jayega aur movies direct chat me deliver hone lagengi!
+
