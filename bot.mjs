@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -342,7 +343,44 @@ function extractTeraBoxLink(text) {
   return null;
 }
 
-// 5. Bot Update Handler
+// 5. Stream Downloader for Large MTProto Uploads
+async function downloadToFile(url, destPath, onProgress) {
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
+    }
+  });
+  if (!res.ok) throw new Error(`Download HTTP error: ${res.status}`);
+
+  const totalBytes = parseInt(res.headers.get('content-length') || '0', 10);
+  let downloadedBytes = 0;
+  const fileStream = fs.createWriteStream(destPath);
+  const reader = res.body.getReader();
+
+  let lastReport = Date.now();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    fileStream.write(value);
+    downloadedBytes += value.length;
+
+    if (onProgress && Date.now() - lastReport > 3000) {
+      lastReport = Date.now();
+      onProgress(downloadedBytes, totalBytes);
+    }
+  }
+
+  fileStream.end();
+  await new Promise((resolve, reject) => {
+    fileStream.on('finish', resolve);
+    fileStream.on('error', reject);
+  });
+
+  return downloadedBytes;
+}
+
+// 6. Bot Update Handler
 async function handleUpdate(update) {
   const msg = update.message;
   if (!msg || !msg.text) return;
@@ -516,41 +554,89 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
   const replyMarkup = { inline_keyboard: buttons };
 
   // 5. ATTEMPT DIRECT VIDEO UPLOAD (MTProto 2GB Engine or Bot API 50MB)
-  const videoCandidates = [result.download_url, result.playback_url].filter(u => u && u.startsWith('https://'));
   let videoDelivered = false;
+  let tempFilePath = null;
 
   // 5A. Try 2 GB MTProto Client (if API_ID & API_HASH are configured in environment)
-  if (mtprotoClient && videoCandidates.length > 0) {
+  if (mtprotoClient && result.download_url && result.download_url.startsWith('https://')) {
     try {
-      console.log(`[MTPROTO] Uploading video to chat ${chatId} via 2GB MTProto Engine...`);
+      console.log(`[MTPROTO] Starting streaming download for 2GB MTProto upload to chat ${chatId}...`);
+      const safeFilename = `video_${Date.now()}_${Math.random().toString(36).substring(7)}.mp4`;
+      tempFilePath = path.join(os.tmpdir(), safeFilename);
+
       if (waitMsgId) {
         await callTelegram('editMessageText', {
           chat_id: chatId,
           message_id: waitMsgId,
-          text: '📤 <b>[▰▰▰▰▰▰▰▰▰▱] 95%</b>\n<i>Uploading full video file via 2GB MTProto Engine...</i>',
+          text: '📥 <b>[▰▰▰▰▰▰▱▱▱▱] 60%</b>\n<i>Downloading high-speed video file into cloud memory...</i>',
           parse_mode: 'HTML'
         }).catch(() => {});
       }
 
+      await downloadToFile(result.download_url, tempFilePath, async (current, total) => {
+        if (waitMsgId) {
+          const mb = (current / 1024 / 1024).toFixed(1);
+          const totalMb = total > 0 ? (total / 1024 / 1024).toFixed(1) : size;
+          const pct = total > 0 ? Math.min(80, 50 + Math.round((current / total) * 30)) : 70;
+          await callTelegram('editMessageText', {
+            chat_id: chatId,
+            message_id: waitMsgId,
+            text: `📥 <b>[▰▰▰▰▰▰▰▱▱▱] ${pct}%</b>\n<i>Downloading: ${mb}MB / ${totalMb}MB...</i>`,
+            parse_mode: 'HTML'
+          }).catch(() => {});
+        }
+      });
+
+      const downloadedSizeMb = (fs.statSync(tempFilePath).size / 1024 / 1024).toFixed(1);
+      console.log(`[MTPROTO] Download complete (${downloadedSizeMb} MB). Uploading to Telegram via MTProto...`);
+
+      if (waitMsgId) {
+        await callTelegram('editMessageText', {
+          chat_id: chatId,
+          message_id: waitMsgId,
+          text: `📤 <b>[▰▰▰▰▰▰▰▰▰▱] 85%</b>\n<i>Uploading full video file (${downloadedSizeMb} MB) to your chat...</i>`,
+          parse_mode: 'HTML'
+        }).catch(() => {});
+      }
+
+      let lastUploadUpdate = Date.now();
       await mtprotoClient.sendFile(chatId, {
-        file: videoCandidates[0],
+        file: tempFilePath,
         caption: caption,
         parseMode: 'html',
         supportsStreaming: true,
-        progressCallback: (progress) => {
-          console.log(`[MTPROTO PROGRESS] ${Math.round(progress * 100)}%`);
+        progressCallback: async (progress) => {
+          const pct = Math.round(progress * 100);
+          console.log(`[MTPROTO UPLOAD PROGRESS] ${pct}%`);
+          if (waitMsgId && Date.now() - lastUploadUpdate > 4000) {
+            lastUploadUpdate = Date.now();
+            await callTelegram('editMessageText', {
+              chat_id: chatId,
+              message_id: waitMsgId,
+              text: `📤 <b>[▰▰▰▰▰▰▰▰▰▰] Uploading ${pct}%</b>\n<i>Sending full video file directly into your chat...</i>`,
+              parse_mode: 'HTML'
+            }).catch(() => {});
+          }
         }
       });
 
       console.log(`[MTPROTO] Video delivered successfully via MTProto!`);
       videoDelivered = true;
     } catch (e) {
-      console.log(`[MTPROTO] Upload notice: ${e.message}`);
+      console.log(`[MTPROTO ERROR] Failed to upload via MTProto: ${e.message}`);
+    } finally {
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        try {
+          fs.unlinkSync(tempFilePath);
+          console.log('[MTPROTO] Cleaned up temporary video file.');
+        } catch (err) {}
+      }
     }
   }
 
   // 5B. Standard Bot API sendVideo
   if (!videoDelivered) {
+    const videoCandidates = [result.download_url, result.playback_url].filter(u => u && u.startsWith('https://'));
     for (const videoUrl of videoCandidates) {
       try {
         console.log(`[BOT] Attempting direct sendVideo to chat ${chatId}...`);
