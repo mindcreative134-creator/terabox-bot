@@ -423,15 +423,25 @@ async function optimizeVideoForTelegram(inputPath, outputPath, thumbPath) {
     await execAsync('ffmpeg -version');
     console.log('[FFMPEG] Found FFmpeg! Preparing FastStart remux (+movflags +faststart) for seamless Telegram playback...');
 
-    // 2. Remux to MP4 with faststart (0% CPU re-encoding, pure stream copy)
+    // 2. Remux to MP4 with faststart & subtitle stripping (Prevents MKV subtitle crash, ensures web/mobile playability)
     try {
-      await execAsync(`ffmpeg -y -i "${inputPath}" -c copy -movflags +faststart "${outputPath}"`);
+      console.log('[FFMPEG] Running FastStart remux (-c:v copy -c:a aac -sn +faststart)...');
+      await execAsync(`ffmpeg -y -i "${inputPath}" -map 0:v:0 -map 0:a:0? -c:v copy -c:a aac -b:a 128k -sn -movflags +faststart "${outputPath}"`);
       if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000) {
         finalFile = outputPath;
-        console.log('[FFMPEG] FastStart MP4 created successfully!');
+        console.log('[FFMPEG] Universal MP4 video created successfully!');
       }
     } catch (err) {
-      console.log('[FFMPEG] FastStart remux note:', err.message);
+      console.log('[FFMPEG] Method A failed, trying copy mode fallback:', err.message);
+      try {
+        await execAsync(`ffmpeg -y -i "${inputPath}" -c:v copy -c:a copy -sn -movflags +faststart "${outputPath}"`);
+        if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000) {
+          finalFile = outputPath;
+          console.log('[FFMPEG] Copy-mode MP4 video created successfully!');
+        }
+      } catch (err2) {
+        console.log('[FFMPEG] FastStart remux note:', err2.message);
+      }
     }
 
     // 3. Extract high-quality thumbnail poster at 5 seconds
@@ -579,7 +589,10 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
   }
 
   // 4. Prepare Result Message & Buttons
-  const safeTitle = escapeHtml(result.title);
+  const cleanTitle = (result.title || 'TeraBox Video')
+    .replace(/\.(mkv|mp4|webm|avi|flv|mov|ts)$/i, '')
+    .trim();
+  const safeTitle = escapeHtml(cleanTitle);
   const size = escapeHtml(result.size);
   const duration = escapeHtml(result.duration_label || 'Full Video');
   const quality = escapeHtml(result.quality || 'Auto');
@@ -648,13 +661,16 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
   if (mtprotoClient && result.download_url && result.download_url.startsWith('https://')) {
     try {
       console.log(`[MTPROTO] Starting streaming download for 2GB MTProto upload to chat ${chatId}...`);
-      const cleanBaseName = (result.title || 'TeraBox_Video')
+      const rawTitle = (result.title || 'TeraBox_Video')
+        .replace(/\.(mkv|mp4|webm|avi|flv|mov|ts)$/i, '')
+        .trim();
+      const cleanBaseName = rawTitle
         .replace(/[\/\\:*?"<>|]/g, '_')
         .replace(/\s+/g, '.')
         .substring(0, 80)
         .trim();
 
-      rawTempFilePath = path.join(os.tmpdir(), `raw_${Date.now()}_${cleanBaseName}.mp4`);
+      rawTempFilePath = path.join(os.tmpdir(), `raw_${Date.now()}_video`);
       optimizedFilePath = path.join(os.tmpdir(), `${cleanBaseName}.mp4`);
       thumbTempPath = path.join(os.tmpdir(), `thumb_${Date.now()}.jpg`);
 
@@ -766,6 +782,7 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
         parseMode: 'html',
         attributes: attributes,
         supportsStreaming: true,
+        mimeType: 'video/mp4',
         buttons: gramButtons.length > 0 ? gramButtons : undefined,
         progressCallback: async (progress) => {
           const pct = Math.round(progress * 100);
