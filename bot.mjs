@@ -204,8 +204,34 @@ function escapeHtml(str) {
   }[m]));
 }
 
+function parseDuration(val) {
+  if (!val) return 0;
+  if (typeof val === 'number' && !isNaN(val)) return Math.round(val);
+  const s = String(val).trim();
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  const colonParts = s.split(':').map((p) => parseInt(p, 10));
+  if (colonParts.length === 3 && colonParts.every((n) => !isNaN(n))) {
+    return colonParts[0] * 3600 + colonParts[1] * 60 + colonParts[2];
+  }
+  if (colonParts.length === 2 && colonParts.every((n) => !isNaN(n))) {
+    return colonParts[0] * 60 + colonParts[1];
+  }
+  const h = s.match(/(\d+)\s*h/i);
+  const m = s.match(/(\d+)\s*m/i);
+  const sec = s.match(/(\d+)\s*s/i);
+  if (h || m || sec) {
+    return (
+      (h ? parseInt(h[1], 10) * 3600 : 0) +
+      (m ? parseInt(m[1], 10) * 60 : 0) +
+      (sec ? parseInt(sec[1], 10) : 0)
+    );
+  }
+  return 0;
+}
+
 function formatDuration(seconds) {
-  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const parsed = parseDuration(seconds);
+  const total = Math.max(0, Math.round(parsed || 0));
   if (!total) return '';
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
@@ -247,7 +273,7 @@ async function resolveTeraBox(link) {
           title: data.meta?.title || 'TeraBox Video',
           size: data.meta?.size || 'Unknown',
           quality: data.meta?.quality || '480p',
-          duration: data.meta?.duration || 0,
+          duration: parseDuration(data.meta?.duration),
           duration_label: data.meta?.duration_label || formatDuration(data.meta?.duration),
           thumbnail: data.meta?.thumbnail || '',
           playback_url: data.playback_url || data.link || '',
@@ -277,7 +303,7 @@ async function resolveTeraBox(link) {
           title: data.meta?.title || 'TeraBox Video',
           size: data.meta?.size || 'Unknown',
           quality: data.meta?.quality || '480p',
-          duration: data.meta?.duration || 0,
+          duration: parseDuration(data.meta?.duration),
           duration_label: data.meta?.duration_label || formatDuration(data.meta?.duration),
           thumbnail: data.meta?.thumbnail || '',
           playback_url: data.playback_url || data.link || '',
@@ -308,7 +334,7 @@ async function resolveTeraBox(link) {
                   title: res.title || 'TeraBox Video',
                   size: res.size ? (Number(res.size) > 100000 ? (Number(res.size)/1024/1024).toFixed(2) + ' MB' : res.size) : 'Unknown',
                   quality: res.quality || 'Auto',
-                  duration: res.duration || 0,
+                  duration: parseDuration(res.duration),
                   duration_label: formatDuration(res.duration),
                   thumbnail: res.thumbnail || '',
                   playback_url: res.stream_url || '',
@@ -381,6 +407,62 @@ async function downloadToFile(url, destPath, onProgress) {
   });
 
   return downloadedBytes;
+}
+
+// 5B. FastStart Remuxer & Metadata Prober for Instant Telegram Video Streaming
+async function optimizeVideoForTelegram(inputPath, outputPath, thumbPath) {
+  let probeInfo = { duration: 0, width: 854, height: 480 };
+  let finalFile = inputPath;
+
+  try {
+    const { exec } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execAsync = promisify(exec);
+
+    // 1. Check if FFmpeg is installed
+    await execAsync('ffmpeg -version');
+    console.log('[FFMPEG] Found FFmpeg! Preparing FastStart remux (+movflags +faststart) for seamless Telegram playback...');
+
+    // 2. Remux to MP4 with faststart (0% CPU re-encoding, pure stream copy)
+    try {
+      await execAsync(`ffmpeg -y -i "${inputPath}" -c copy -movflags +faststart "${outputPath}"`);
+      if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000) {
+        finalFile = outputPath;
+        console.log('[FFMPEG] FastStart MP4 created successfully!');
+      }
+    } catch (err) {
+      console.log('[FFMPEG] FastStart remux note:', err.message);
+    }
+
+    // 3. Extract high-quality thumbnail poster at 5 seconds
+    if (thumbPath) {
+      try {
+        await execAsync(`ffmpeg -y -ss 00:00:05 -i "${finalFile}" -vframes 1 -q:v 2 "${thumbPath}"`);
+        console.log('[FFMPEG] Video poster thumbnail extracted successfully.');
+      } catch (err) {
+        console.log('[FFMPEG] Poster thumbnail note:', err.message);
+      }
+    }
+
+    // 4. Probe exact duration, width, height with ffprobe
+    try {
+      const probeRes = await execAsync(`ffprobe -v error -select_streams v:0 -show_entries stream=width,height,duration -of json "${finalFile}"`);
+      const data = JSON.parse(probeRes.stdout);
+      const stream = data.streams?.[0];
+      if (stream) {
+        if (stream.duration) probeInfo.duration = Math.round(Number(stream.duration));
+        if (stream.width) probeInfo.width = Number(stream.width);
+        if (stream.height) probeInfo.height = Number(stream.height);
+        console.log(`[FFPROBE] Metadata probed: ${probeInfo.width}x${probeInfo.height}, ${probeInfo.duration}s`);
+      }
+    } catch (err) {
+      console.log('[FFPROBE] ffprobe notice:', err.message);
+    }
+  } catch (err) {
+    console.log('[FFMPEG] FFmpeg not available or failed, using standard stream attributes.');
+  }
+
+  return { file: finalFile, ...probeInfo };
 }
 
 // 6. Bot Update Handler
@@ -558,14 +640,23 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
 
   // 5. ATTEMPT DIRECT VIDEO UPLOAD (MTProto 2GB Engine or Bot API 50MB)
   let videoDelivered = false;
-  let tempFilePath = null;
+  let rawTempFilePath = null;
+  let optimizedFilePath = null;
+  let thumbTempPath = null;
 
   // 5A. Try 2 GB MTProto Client (if API_ID & API_HASH are configured in environment)
   if (mtprotoClient && result.download_url && result.download_url.startsWith('https://')) {
     try {
       console.log(`[MTPROTO] Starting streaming download for 2GB MTProto upload to chat ${chatId}...`);
-      const safeFilename = `video_${Date.now()}_${Math.random().toString(36).substring(7)}.mp4`;
-      tempFilePath = path.join(os.tmpdir(), safeFilename);
+      const cleanBaseName = (result.title || 'TeraBox_Video')
+        .replace(/[\/\\:*?"<>|]/g, '_')
+        .replace(/\s+/g, '.')
+        .substring(0, 80)
+        .trim();
+
+      rawTempFilePath = path.join(os.tmpdir(), `raw_${Date.now()}_${cleanBaseName}.mp4`);
+      optimizedFilePath = path.join(os.tmpdir(), `${cleanBaseName}.mp4`);
+      thumbTempPath = path.join(os.tmpdir(), `thumb_${Date.now()}.jpg`);
 
       if (waitMsgId) {
         await callTelegram('editMessageText', {
@@ -576,7 +667,7 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
         }).catch(() => {});
       }
 
-      await downloadToFile(result.download_url, tempFilePath, async (current, total) => {
+      await downloadToFile(result.download_url, rawTempFilePath, async (current, total) => {
         if (waitMsgId) {
           const mb = (current / 1024 / 1024).toFixed(1);
           const totalMb = total > 0 ? (total / 1024 / 1024).toFixed(1) : size;
@@ -590,8 +681,35 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
         }
       });
 
-      const downloadedSizeMb = (fs.statSync(tempFilePath).size / 1024 / 1024).toFixed(1);
-      console.log(`[MTPROTO] Download complete (${downloadedSizeMb} MB). Uploading to Telegram via MTProto...`);
+      const downloadedSizeMb = (fs.statSync(rawTempFilePath).size / 1024 / 1024).toFixed(1);
+      console.log(`[MTPROTO] Download complete (${downloadedSizeMb} MB). Preparing FastStart & metadata optimization...`);
+
+      if (waitMsgId) {
+        await callTelegram('editMessageText', {
+          chat_id: chatId,
+          message_id: waitMsgId,
+          text: '⚡ <b>[▰▰▰▰▰▰▰▰▱▱] 80%</b>\n<i>Optimizing video headers (FastStart) for seamless streaming in Telegram...</i>',
+          parse_mode: 'HTML'
+        }).catch(() => {});
+      }
+
+      // Download web poster thumbnail if available
+      if (result.thumbnail && result.thumbnail.startsWith('http')) {
+        try {
+          const tRes = await fetch(result.thumbnail, { signal: AbortSignal.timeout(6000) });
+          if (tRes.ok) {
+            const buf = Buffer.from(await tRes.arrayBuffer());
+            fs.writeFileSync(thumbTempPath, buf);
+            console.log('[THUMB] Web poster thumbnail saved to disk.');
+          }
+        } catch (e) {
+          console.log('[THUMB] Web poster note:', e.message);
+        }
+      }
+
+      // Optimize with FFmpeg FastStart and probe exact duration/resolution
+      const optRes = await optimizeVideoForTelegram(rawTempFilePath, optimizedFilePath, thumbTempPath);
+      const uploadFile = optRes.file;
 
       if (waitMsgId) {
         await callTelegram('editMessageText', {
@@ -602,12 +720,53 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
         }).catch(() => {});
       }
 
-      let lastUploadUpdate = Date.now();
-      await mtprotoClient.sendFile(chatId, {
-        file: tempFilePath,
+      const { Api } = await import('telegram');
+      const { Button } = await import('telegram/tl/custom/button.js');
+
+      const finalDuration = Math.max(
+        1,
+        Math.round(optRes.duration || parseDuration(result.duration) || parseDuration(result.duration_label) || 7200)
+      );
+
+      let finalWidth = optRes.width || 854;
+      let finalHeight = optRes.height || 480;
+      if (!optRes.width && result.quality) {
+        const qStr = String(result.quality).toLowerCase();
+        if (qStr.includes('1080')) { finalWidth = 1920; finalHeight = 1080; }
+        else if (qStr.includes('720')) { finalWidth = 1280; finalHeight = 720; }
+        else if (qStr.includes('360')) { finalWidth = 640; finalHeight = 360; }
+      }
+
+      const attributes = [
+        new Api.DocumentAttributeVideo({
+          duration: finalDuration,
+          w: finalWidth,
+          h: finalHeight,
+          supportsStreaming: true
+        }),
+        new Api.DocumentAttributeFilename({
+          fileName: `${cleanBaseName}.mp4`
+        })
+      ];
+
+      const gramButtons = [];
+      if (koyebPlayerUrl) {
+        gramButtons.push([Button.url('▶️ Watch Online (Koyeb Player)', koyebPlayerUrl)]);
+      }
+      if (result.playback_url && result.playback_url.startsWith('https://')) {
+        gramButtons.push([Button.url('🎬 Direct High-Speed Stream', result.playback_url)]);
+      }
+      if (result.download_url && result.download_url.startsWith('https://')) {
+        gramButtons.push([Button.url('📥 Fast Download Link', result.download_url)]);
+      }
+
+      const sendOptions = {
+        file: uploadFile,
         caption: caption,
         parseMode: 'html',
+        attributes: attributes,
         supportsStreaming: true,
+        buttons: gramButtons.length > 0 ? gramButtons : undefined,
         progressCallback: async (progress) => {
           const pct = Math.round(progress * 100);
           console.log(`[MTPROTO UPLOAD PROGRESS] ${pct}%`);
@@ -621,19 +780,28 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
             }).catch(() => {});
           }
         }
-      });
+      };
 
-      console.log(`[MTPROTO] Video delivered successfully via MTProto!`);
+      if (fs.existsSync(thumbTempPath) && fs.statSync(thumbTempPath).size > 100) {
+        sendOptions.thumb = thumbTempPath;
+      }
+
+      let lastUploadUpdate = Date.now();
+      await mtprotoClient.sendFile(chatId, sendOptions);
+
+      console.log(`[MTPROTO] Video delivered successfully via MTProto with FastStart and duration ${finalDuration}s!`);
       videoDelivered = true;
     } catch (e) {
       console.log(`[MTPROTO ERROR] Failed to upload via MTProto: ${e.message}`);
     } finally {
-      if (tempFilePath && fs.existsSync(tempFilePath)) {
-        try {
-          fs.unlinkSync(tempFilePath);
-          console.log('[MTPROTO] Cleaned up temporary video file.');
-        } catch (err) {}
-      }
+      [rawTempFilePath, optimizedFilePath, thumbTempPath].forEach((p) => {
+        if (p && fs.existsSync(p)) {
+          try {
+            fs.unlinkSync(p);
+          } catch (err) {}
+        }
+      });
+      console.log('[MTPROTO] Cleaned up temporary files.');
     }
   }
 
@@ -643,13 +811,14 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
     for (const videoUrl of videoCandidates) {
       try {
         console.log(`[BOT] Attempting direct sendVideo to chat ${chatId}...`);
+        const durationSec = Math.max(1, Math.round(parseDuration(result.duration) || parseDuration(result.duration_label) || 7200));
         const videoRes = await callTelegram('sendVideo', {
           chat_id: chatId,
           video: videoUrl,
           caption: caption,
           parse_mode: 'HTML',
           supports_streaming: true,
-          duration: Number(result.duration) || undefined,
+          duration: durationSec,
           reply_markup: buttons.length > 0 ? replyMarkup : undefined
         });
 

@@ -1,8 +1,9 @@
 FROM node:20-slim
 
-# Install Chromium and dependencies for headless browser resolution on Linux/Cloud
+# Install Chromium, FFmpeg and dependencies for faststart video remuxing and headless browser
 RUN apt-get update && apt-get install -y \
     chromium \
+    ffmpeg \
     ca-certificates \
     fonts-liberation \
     --no-install-recommends \
