@@ -385,12 +385,10 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
     clearInterval(animInterval);
   }
 
-  // 3. Delete Wait Message
-  if (waitMsgId) {
-    await callTelegram('deleteMessage', { chat_id: chatId, message_id: waitMsgId }).catch(() => {});
-  }
-
   if (!result || !result.ok) {
+    if (waitMsgId) {
+      await callTelegram('deleteMessage', { chat_id: chatId, message_id: waitMsgId }).catch(() => {});
+    }
     await callTelegram('sendMessage', {
       chat_id: chatId,
       text: `❌ <b>Resolution Failed!</b>\n\n${escapeHtml(result?.error || 'Video stream extract nahi ho paya.')}\n\n👉 Kripya check karein ki link active aur valid hai.`,
@@ -399,7 +397,17 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
     return;
   }
 
-  // 4. Prepare Result Message
+  // 3. Update Progress to Ready
+  if (waitMsgId) {
+    await callTelegram('editMessageText', {
+      chat_id: chatId,
+      message_id: waitMsgId,
+      text: '📤 <b>[▰▰▰▰▰▰▰▰▰▱] 95%</b>\n<i>Video ready! Attempting direct video upload...</i>',
+      parse_mode: 'HTML'
+    }).catch(() => {});
+  }
+
+  // 4. Prepare Result Message & Buttons
   const safeTitle = escapeHtml(result.title);
   const size = escapeHtml(result.size);
   const duration = escapeHtml(result.duration_label || 'Full Video');
@@ -417,12 +425,12 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
 ⏱️ <b>Duration:</b> <b>${duration} (Full Movie)</b>
 📦 <b>File Size:</b> ${size}
 📊 <b>Quality:</b> ${quality}
-☁️ <b>Server:</b> 🟢 <i>Koyeb Cloud (Zero Codbreaker)</i>
+☁️ <b>Server:</b> 🟢 <i>Koyeb Cloud (Self-Hosted)</i>
 
-🌐 <b>Aapka Apna Cloud Web Player:</b>
+🌐 <b>Watch In Web Player:</b>
 👉 <a href="${koyebPlayerUrl}">Open In Koyeb Player</a>
 
-ℹ️ <i>Note: Ye file ${size} ki hai (Telegram Bot API 50MB limit ki wajah se full movie file direct chat me nahi bheji ja sakti, isliye direct stream aur download link provide kiya gaya hai).</i>`;
+ℹ️ <i>Tip: Niche diye gaye Fast Download button se direct video download kar sakte hain!</i>`;
 
   // Inline Keyboard Buttons
   const buttons = [];
@@ -451,7 +459,7 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
   if (result.download_url && result.download_url.startsWith('https://')) {
     buttons.push([
       {
-        text: '📥 Direct Download Link',
+        text: '📥 Fast Download Link',
         url: result.download_url
       }
     ]);
@@ -459,12 +467,62 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
 
   const replyMarkup = { inline_keyboard: buttons };
 
-  // 5. Send with Thumbnail Photo if available
+  // 5. ATTEMPT DIRECT VIDEO UPLOAD (sendVideo)
+  // If download_url or playback_url is a direct video stream, Telegram will attempt to deliver as native video
+  const videoCandidates = [result.download_url, result.playback_url].filter(u => u && u.startsWith('https://'));
+  let videoDelivered = false;
+
+  for (const videoUrl of videoCandidates) {
+    try {
+      console.log(`[BOT] Attempting direct sendVideo to chat ${chatId}...`);
+      const videoRes = await callTelegram('sendVideo', {
+        chat_id: chatId,
+        video: videoUrl,
+        caption: caption,
+        parse_mode: 'HTML',
+        supports_streaming: true,
+        duration: Number(result.duration) || undefined,
+        reply_markup: buttons.length > 0 ? replyMarkup : undefined
+      });
+
+      if (videoRes && videoRes.ok) {
+        console.log(`[BOT] Direct video delivered successfully!`);
+        videoDelivered = true;
+        break;
+      } else {
+        console.log(`[BOT] sendVideo notice: ${videoRes?.description || videoRes?.error}`);
+      }
+    } catch (e) {
+      console.log(`[BOT] sendVideo attempt error: ${e.message}`);
+    }
+  }
+
+  // Delete Wait Message
+  if (waitMsgId) {
+    await callTelegram('deleteMessage', { chat_id: chatId, message_id: waitMsgId }).catch(() => {});
+  }
+
+  if (videoDelivered) return;
+
+  // 6. Fallback: If Telegram cannot upload video directly (>50MB limit or non-direct stream), send Media Photo Card with buttons
+  const fallbackCaption = `🎬 <b>${safeTitle}</b>
+
+⏱️ <b>Duration:</b> <b>${duration} (Full Movie)</b>
+📦 <b>File Size:</b> ${size}
+📊 <b>Quality:</b> ${quality}
+☁️ <b>Server:</b> 🟢 <i>Koyeb Cloud (Self-Hosted)</i>
+
+🌐 <b>Watch In Web Player:</b>
+👉 <a href="${koyebPlayerUrl}">Open In Koyeb Player</a>
+
+⚠️ <i>Telegram Notice: Telegram Bot API 50MB se badi files (ye file <b>${size}</b> ki hai) ko direct video chat me upload karne allow nahi karta. Isliye aap niche diye gaye buttons se 1-click me direct online dekh sakte hain ya download kar sakte hain!</i>`;
+
+  // Send with Thumbnail Photo if available
   if (result.thumbnail && result.thumbnail.startsWith('http')) {
     const photoRes = await callTelegram('sendPhoto', {
       chat_id: chatId,
       photo: result.thumbnail,
-      caption: caption,
+      caption: fallbackCaption,
       parse_mode: 'HTML',
       reply_markup: buttons.length > 0 ? replyMarkup : undefined
     });
@@ -475,7 +533,7 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
   // Fallback: Send plain message if photo fails or thumbnail missing
   await callTelegram('sendMessage', {
     chat_id: chatId,
-    text: caption,
+    text: fallbackCaption,
     parse_mode: 'HTML',
     reply_markup: buttons.length > 0 ? replyMarkup : undefined,
     disable_web_page_preview: false
