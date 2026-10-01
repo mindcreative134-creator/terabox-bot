@@ -116,9 +116,12 @@ if (process.env.SESSION_STRING) config.SESSION_STRING = process.env.SESSION_STRI
 
 // Fallback Token for instant Cloud & Koyeb execution
 const FALLBACK_TOKEN = '7876010393:AAG9n6VlIGjTrDlAkxXnlxvOyGxe34BzS5M';
-const TOKEN = (config.BOT_TOKEN && config.BOT_TOKEN !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') 
-  ? config.BOT_TOKEN.trim() 
+let candidateToken = (config.BOT_TOKEN && config.BOT_TOKEN !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') 
+  ? config.BOT_TOKEN 
   : FALLBACK_TOKEN;
+
+// Strip quotes, spaces, newlines that may be accidentally introduced in environment variables
+const TOKEN = String(candidateToken || FALLBACK_TOKEN).replace(/^["'\s]+|["'\s]+$/g, '').trim();
 
 // 2. MTProto 2 GB Upload Engine
 let mtprotoClient = null;
@@ -708,12 +711,25 @@ Bas mujhe koi bhi <b>TeraBox / TeraShareLink / TeraShareFile</b> ka video link b
 
 // 6. Polling Engine
 async function startPolling() {
-  console.log('🔄 Checking Telegram Bot connection...');
-  const me = await callTelegram('getMe');
+  let me = null;
+  for (let attempt = 1; attempt <= 15; attempt++) {
+    console.log(`🔄 Checking Telegram Bot connection (Attempt ${attempt}/15)...`);
+    me = await callTelegram('getMe');
+    if (me && me.ok) {
+      break;
+    }
+    console.log(`[BOT] Connection attempt ${attempt} failed: ${me?.description || me?.error || 'retrying'}... Waiting 2s`);
+    await new Promise((r) => setTimeout(r, 2000));
+  }
 
   if (!me || !me.ok) {
-    console.error('❌ Failed to connect to Telegram Bot. Please verify your BOT_TOKEN.');
-    process.exit(1);
+    console.error('❌ Failed to connect to Telegram Bot after 15 attempts. Please verify your BOT_TOKEN:', me?.description || me?.error);
+    // Keep HTTP server running so Koyeb health check stays alive and container does not crash-loop
+    while (true) {
+      await new Promise((r) => setTimeout(r, 10000));
+      me = await callTelegram('getMe');
+      if (me && me.ok) break;
+    }
   }
 
   console.log(`
